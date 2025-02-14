@@ -83,10 +83,13 @@ def llm_completion(chat_prompt="", system="", temp=0.7, max_tokens=2000, remove_
         model="gpt-4o-mini"
     else:
         raise Exception("No OpenAI or Gemini API Key found for LLM request")
-    max_retry = 5
+    
+    max_retry = 10
     retry = 0
     error = ""
-    for i in range(max_retry):
+    base_delay = 1  # Base delay in seconds
+    
+    while retry < max_retry:
         try:
             if conversation:
                 messages = conversation
@@ -105,15 +108,28 @@ def llm_completion(chat_prompt="", system="", temp=0.7, max_tokens=2000, remove_
             text = response.choices[0].message.content.strip()
             if remove_nl:
                 text = re.sub('\s+', ' ', text)
+            
+            # Log successful completion
             filename = '%s_llm_completion.txt' % time()
             if not os.path.exists('.logs/gpt_logs'):
                 os.makedirs('.logs/gpt_logs')
             with open('.logs/gpt_logs/%s' % filename, 'w', encoding='utf-8') as outfile:
                 outfile.write(f"System prompt: ===\n{system}\n===\n"+f"Chat prompt: ===\n{chat_prompt}\n===\n" + f'RESPONSE:\n====\n{text}\n===\n')
             return text
+            
         except Exception as oops:
-            retry += 1
-            print('Error communicating with OpenAI:', oops)
             error = str(oops)
-            sleep(1)
-    raise Exception(f"Error communicating with LLM Endpoint Completion errored more than error: {error}")
+            retry += 1
+            
+            # Check if it's a rate limit error (429)
+            if "429" in error or "RESOURCE_EXHAUSTED" in error:
+                # Calculate delay with exponential backoff: 2^retry * base_delay
+                delay = min(2 ** (retry - 1) * base_delay, 32)  # Cap at 32 seconds
+                print(f'Rate limit exceeded (429). Retrying in {delay} seconds... (Attempt {retry}/{max_retry})')
+                sleep(delay)
+            else:
+                # For other errors, use a simple delay
+                print(f'Error communicating with LLM API: {error}. Retrying in {base_delay} seconds... (Attempt {retry}/{max_retry})')
+                sleep(base_delay)
+                
+    raise Exception(f"Error communicating with LLM Endpoint. Max retries ({max_retry}) exceeded. Last error: {error}")
